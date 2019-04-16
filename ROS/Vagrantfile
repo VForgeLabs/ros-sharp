@@ -1,0 +1,85 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure('2') do |config|
+  config.vm.box = 'ubuntu/xenial64'
+
+  config.vm.network 'forwarded_port', guest: 9090, host: 9090, :adapter => 1
+
+  config.vm.provider 'virtualbox' do |vb|
+    vb.gui = false
+    vb.memory = '1024'
+
+    # https://github.com/siemens/ros-sharp/wiki/User_Inst_UbuntuOnOracleVM
+    config.vm.network 'private_network', type: 'dhcp', :adapter => 2
+    vb.customize ['modifyvm', :id, '--hostonlyadapter2', 'vboxnet0']
+    vb.customize ['modifyvm', :id, '--nicpromisc2', 'allow-vms']
+    vb.customize ['modifyvm', :id, '--cableconnected2', 'on']
+
+    # FIXME: This takes a *LONG* time to configure, but eventually does complete
+    config.vm.network 'private_network', type: 'dhcp', bridge: 'eth1', :adapter => 3
+    vb.customize ['modifyvm', :id, '--nic3', 'bridged']
+    vb.customize ['modifyvm', :id, '--bridgeadapter3', 'bridge0']
+    vb.customize ['modifyvm', :id, '--nicpromisc3', 'allow-vms']
+    vb.customize ['modifyvm', :id, '--cableconnected3', 'on']
+  end
+
+  config.vm.provision 'shell', inline: <<-SHELL
+    ros_distro='kinetic'
+
+    sh -c 'echo "deb http://packages.ros.org/ros/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros-latest.list'
+    apt-key adv --keyserver hkp://ha.pool.sks-keyservers.net:80 --recv-key 421C365BD9FF1F717815A3895523BAEEB01FA116
+
+    apt-get update -y
+    apt-get install -y "ros-${ros_distro}-ros-base"
+    apt-get install -y "ros-${ros_distro}-ros-tutorials"
+    apt-get install -y "ros-${ros_distro}-common-tutorials"
+    apt-get install -y "ros-${ros_distro}-rosbridge-server"
+    apt-cache search ros-kinetic
+    rosdep init
+    su vagrant -c 'rosdep update'
+
+    # Ensure updates to .bashrc are idempotent
+    if ! grep -q "${ros_distro}/setup.bash" /home/vagrant/.bashrc; then
+      echo "source /opt/ros/${ros_distro}/setup.bash" >> /home/vagrant/.bashrc
+    fi
+    apt-get install -y python-rosinstall python-rosinstall-generator python-wstool build-essential
+    sh -c 'echo "deb http://packages.osrfoundation.org/gazebo/ubuntu-stable `lsb_release -cs` main" > /etc/apt/sources.list.d/gazebo-stable.list'
+    wget http://packages.osrfoundation.org/gazebo.key -O - | sudo apt-key add -
+    sudo apt-get -y update
+    sudo apt-get -y install gazebo7
+    apt-key adv --keyserver keys.gnupg.net --recv-key C8B3A55A6F3EFCDE || apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-key C8B3A55A6F3EFCDE
+    sudo add-apt-repository "deb http://realsense-hw-public.s3.amazonaws.com/Debian/apt-repo xenial main" -u
+    apt-get install -y librealsense2-dkms
+    apt-get install -y librealsense2-utils
+    sudo apt-get install -y ros-kinetic-turtlebot ros-kinetic-turtlebot-apps ros-kinetic-turtlebot-interactions ros-kinetic-turtlebot-simulator ros-kinetic-kobuki-ftdi ros-kinetic-ar-track-alvar-msgs ros-kinetic-turtlebot-gazebo
+    export TURTLEBOT_BASE=roomba
+    export TURTLEBOT_STACKS=circles
+    export TURTLEBOT_3D_SENSOR=kinect
+    if ! grep -q "export TURTLEBOT_BASE=roomba" /home/vagrant/.bashrc; then
+      echo export TURTLEBOT_BASE=roomba >> /home/vagrant/.bashrc
+    fi
+    if ! grep -q "TURTLEBOT_STACKS=circles" /home/vagrant/.bashrc; then
+      echo export TURTLEBOT_STACKS=circles >> /home/vagrant/.bashrc
+    fi
+    if ! grep -q "TURTLEBOT_3D_SENSOR=kinect" /home/vagrant/.bashrc; then
+      echo export TURTLEBOT_3D_SENSOR=kinect >> /home/vagrant/.bashrc
+    fi
+    apt-get -y install python-xlib
+
+    mkdir -p /home/vagrant/catkin_ws/src && chown -R vagrant:vagrant /home/vagrant/catkin_ws/
+    cp -r /vagrant/file_server/ /home/vagrant/catkin_ws/src/file_server/
+    cp -r /vagrant/unity_simulation_scene /home/vagrant/catkin_ws/src/unity_simulation_scene/
+    chmod +x /home/vagrant/catkin_ws/src/unity_simulation_scene/scripts/mouse_to_joy.py
+
+    echo ''
+    echo '--------------------------------------------------------------------------------'
+    echo 'Setup is complete. Run "vagrant ssh" to connect. Project files are synced to /vagrant on guest VM.'
+    echo 'pushd /home/vagrant/catkin_ws/ && catkin_make && popd'
+    echo 'source /home/vagrant/catkin_ws/devel/setup.bash'
+    echo 'pushd /home/vagrant/catkin_ws/ && catkin_make install && popd'
+    echo 'roslaunch file_server publish_description_turtlebot2.launch'
+    echo '--------------------------------------------------------------------------------'
+    echo ''
+  SHELL
+end
